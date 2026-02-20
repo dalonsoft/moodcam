@@ -4,7 +4,7 @@
 
 Moodcam uses machine learning models running entirely in the browser to detect faces and analyze emotions in real time — no server processing, no data leaving your device.
 
-> 🇪🇸 [Versión en español](README.es.md) · � [Versió en català](README.ca.md)
+> [Versión en español](README.es.md) · [Versió en català](README.ca.md)
 
 ---
 

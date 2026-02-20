@@ -4,7 +4,7 @@
 
 Moodcam utilitza models d'aprenentatge automàtic que s'executen completament al navegador per detectar rostres i analitzar emocions en temps real — sense processament al servidor, sense que les teves dades surtin del teu dispositiu.
 
-> 🇬🇧 [English version](README.md) · 🇪🇸 [Versión en español](README.es.md)
+> [English version](README.md) · [Versión en español](README.es.md)
 
 ---
 

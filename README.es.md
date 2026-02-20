@@ -4,7 +4,7 @@
 
 Moodcam utiliza modelos de aprendizaje automático que se ejecutan completamente en el navegador para detectar rostros y analizar emociones en tiempo real — sin procesamiento en servidor, sin que tus datos salgan de tu dispositivo.
 
-> 🇬🇧 [English version](README.md) · � [Versió en català](README.ca.md)
+> [English version](README.md) · [Versió en català](README.ca.md)
 
 ---
 
