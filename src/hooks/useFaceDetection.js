@@ -1,31 +1,88 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { Human } from '@vladmandic/human'
 
-const humanConfig = {
-    modelBasePath: '/models',
-    // Solo habilitamos lo necesario para emociones
+export const DEFAULT_CONFIG = {
     face: {
-        enabled: true,
-        detector: { enabled: true, rotation: false, maxDetected: 1, minConfidence: 0.5 },
+        detector: { minConfidence: 0.5, maxDetected: 1, rotation: false, iouThreshold: 0.1, skipFrames: 99, skipTime: 2500 },
         mesh: { enabled: true },
-        emotion: { enabled: true, minConfidence: 0.1 },
-        description: { enabled: false },
-        iris: { enabled: false },
-        antispoof: { enabled: false },
-        liveness: { enabled: false },
+        emotion: { minConfidence: 0.3, skipFrames: 99, skipTime: 1500 },
     },
-    body: { enabled: false },
-    hand: { enabled: false },
-    object: { enabled: false },
-    gesture: { enabled: false },
-    segmentation: { enabled: false },
+    filter: {
+        equalization: true,
+        autoBrightness: true,
+        sharpness: 0,
+        brightness: 0,
+        contrast: 0,
+        blur: 0,
+    },
+    cacheSensitivity: 0.7,
+    smoothing: { enabled: true, factor: 0.25 },
+}
+
+const STORAGE_KEY = 'moodcam-detection-config'
+
+function loadStoredConfig() {
+    try {
+        const stored = localStorage.getItem(STORAGE_KEY)
+        if (!stored) return null
+        const parsed = JSON.parse(stored)
+        // Merge con defaults para cubrir nuevas keys tras actualizaciones
+        return mergeDeep(structuredClone(DEFAULT_CONFIG), parsed)
+    } catch {
+        return null
+    }
+}
+
+function saveConfig(config) {
+    try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(config))
+    } catch {
+        // Silenciar errores de quota o modo privado
+    }
+}
+
+function mergeDeep(target, source) {
+    for (const key of Object.keys(source)) {
+        if (source[key] && typeof source[key] === 'object' && !Array.isArray(source[key]) && key in target) {
+            mergeDeep(target[key], source[key])
+        } else if (key in target) {
+            target[key] = source[key]
+        }
+    }
+    return target
+}
+
+function buildHumanConfig(userConfig) {
+    return {
+        modelBasePath: '/models',
+        cacheSensitivity: userConfig.cacheSensitivity,
+        filter: {
+            enabled: true,
+            ...userConfig.filter,
+        },
+        face: {
+            enabled: true,
+            detector: { enabled: true, ...userConfig.face.detector },
+            mesh: { enabled: true },
+            emotion: { enabled: true, ...userConfig.face.emotion },
+            description: { enabled: false },
+            iris: { enabled: false },
+            antispoof: { enabled: false },
+            liveness: { enabled: false },
+        },
+        body: { enabled: false },
+        hand: { enabled: false },
+        object: { enabled: false },
+        gesture: { enabled: false },
+        segmentation: { enabled: false },
+    }
 }
 
 // Instancia singleton para evitar recargar modelos
 let humanInstance = null
-function getHuman() {
+function getHuman(config) {
     if (!humanInstance) {
-        humanInstance = new Human(humanConfig)
+        humanInstance = new Human(buildHumanConfig(config))
     }
     return humanInstance
 }
@@ -36,6 +93,7 @@ export default function useFaceDetection() {
     const streamRef = useRef(null)
     const rafRef = useRef(null)
     const detectingRef = useRef(false)
+    const smoothedEmotionsRef = useRef(null)
 
     const [modelsLoaded, setModelsLoaded] = useState(false)
     const [cameraActive, setCameraActive] = useState(false)
@@ -45,13 +103,73 @@ export default function useFaceDetection() {
     const [gender, setGender] = useState(null)
     const [error, setError] = useState(null)
     const [loading, setLoading] = useState(true)
+    const [detectionConfig, setDetectionConfig] = useState(() => loadStoredConfig() || structuredClone(DEFAULT_CONFIG))
+
+    const configRef = useRef(detectionConfig)
+
+    // Mantener configRef sincronizado
+    useEffect(() => {
+        configRef.current = detectionConfig
+    }, [detectionConfig])
+
+    // Aplicar cambios de config al Human instance en caliente
+    const updateConfig = useCallback((key, value) => {
+        setDetectionConfig(prev => {
+            const next = structuredClone(prev)
+            const keys = key.split('.')
+            let obj = next
+            for (let i = 0; i < keys.length - 1; i++) {
+                obj = obj[keys[i]]
+            }
+            obj[keys[keys.length - 1]] = value
+            return next
+        })
+    }, [])
+
+    const resetConfig = useCallback(() => {
+        const defaults = structuredClone(DEFAULT_CONFIG)
+        setDetectionConfig(defaults)
+    }, [])
+
+    // Persistir config en localStorage cuando cambia
+    useEffect(() => {
+        saveConfig(detectionConfig)
+    }, [detectionConfig])
+
+    // Sincronizar config con Human instance
+    useEffect(() => {
+        if (!humanInstance) return
+        const newHumanConfig = buildHumanConfig(detectionConfig)
+        // Actualizar config del runtime sin recargar modelos
+        Object.assign(humanInstance.config.face.detector, newHumanConfig.face.detector)
+        Object.assign(humanInstance.config.face.emotion, newHumanConfig.face.emotion)
+        Object.assign(humanInstance.config.filter, newHumanConfig.filter)
+        humanInstance.config.cacheSensitivity = newHumanConfig.cacheSensitivity
+    }, [detectionConfig])
+
+    // Suavizado exponencial de emociones
+    const smoothEmotions = useCallback((rawEmotions) => {
+        const cfg = configRef.current.smoothing
+        if (!cfg.enabled || !smoothedEmotionsRef.current) {
+            smoothedEmotionsRef.current = { ...rawEmotions }
+            return { ...rawEmotions }
+        }
+        const alpha = cfg.factor
+        const smoothed = {}
+        for (const key in rawEmotions) {
+            const prev = smoothedEmotionsRef.current[key] ?? rawEmotions[key]
+            smoothed[key] = alpha * rawEmotions[key] + (1 - alpha) * prev
+        }
+        smoothedEmotionsRef.current = smoothed
+        return smoothed
+    }, [])
 
     // Cargar modelos
     useEffect(() => {
         async function loadModels() {
             try {
                 setLoading(true)
-                const human = getHuman()
+                const human = getHuman(detectionConfig)
                 await human.load()
                 await human.warmup()
                 setModelsLoaded(true)
@@ -63,6 +181,7 @@ export default function useFaceDetection() {
             }
         }
         loadModels()
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
 
     // Iniciar cámara
@@ -103,6 +222,7 @@ export default function useFaceDetection() {
             rafRef.current = null
         }
         detectingRef.current = false
+        smoothedEmotionsRef.current = null
         setCameraActive(false)
         setEmotions(null)
         setDominant(null)
@@ -117,7 +237,7 @@ export default function useFaceDetection() {
         const video = videoRef.current
         if (!video) return
 
-        const human = getHuman()
+        const human = getHuman(configRef.current)
 
         const handlePlay = () => {
             detectingRef.current = true
@@ -148,16 +268,18 @@ export default function useFaceDetection() {
                     if (result.face && result.face.length > 0) {
                         const face = result.face[0]
 
-                        // Procesar emociones
+                        // Procesar emociones con suavizado
                         if (face.emotion && face.emotion.length > 0) {
-                            const emotionMap = {}
+                            const rawMap = {}
                             face.emotion.forEach(({ emotion, score }) => {
-                                emotionMap[emotion] = score
+                                rawMap[emotion] = score
                             })
-                            setEmotions(emotionMap)
+                            const smoothed = smoothEmotions(rawMap)
+                            setEmotions(smoothed)
 
-                            // Emoción dominante (primer elemento ya está ordenado por score)
-                            setDominant(face.emotion[0].emotion)
+                            // Emoción dominante del resultado suavizado
+                            const dominantEmotion = Object.entries(smoothed).sort(([, a], [, b]) => b - a)[0][0]
+                            setDominant(dominantEmotion)
                         }
 
                         // Edad y género (extras)
@@ -215,5 +337,8 @@ export default function useFaceDetection() {
         loading,
         startCamera,
         stopCamera,
+        detectionConfig,
+        updateConfig,
+        resetConfig,
     }
 }
