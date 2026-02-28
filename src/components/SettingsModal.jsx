@@ -106,7 +106,30 @@ function ToggleParam({ param, value, onChange }) {
   )
 }
 
-export default function SettingsModal({ isOpen, onClose, config, onConfigChange, onReset }) {
+function TextParam({ label, value, onChange, placeholder, type = 'text', description }) {
+  return (
+    <div className="space-y-1">
+      <label className="text-sm font-medium text-gray-300">{label}</label>
+      <input
+        type={type}
+        value={value || ''}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="w-full px-3 py-2 text-sm bg-gray-800 border border-gray-700 rounded-lg text-gray-200 placeholder-gray-500 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500/30 transition-colors"
+      />
+      {description && <p className="text-[11px] text-gray-600">{description}</p>}
+    </div>
+  )
+}
+
+const MQTT_STATUS_MAP = {
+  disconnected: { label: 'Desconectado', color: 'bg-gray-500' },
+  connecting: { label: 'Conectando...', color: 'bg-yellow-500 animate-pulse' },
+  connected: { label: 'Conectado', color: 'bg-green-500' },
+  error: { label: 'Error', color: 'bg-red-500' },
+}
+
+export default function SettingsModal({ isOpen, onClose, config, onConfigChange, onReset, mqttConfig, onMqttConfigChange, onMqttReset, mqttStatus, mqttError }) {
   const [expandedSection, setExpandedSection] = useState('emotion')
 
   if (!isOpen) return null
@@ -183,6 +206,125 @@ export default function SettingsModal({ isOpen, onClose, config, onConfigChange,
               </div>
             )
           })}
+
+          {/* Sección MQTT */}
+          {mqttConfig && (
+            <div className="border border-gray-800 rounded-xl overflow-hidden">
+              <button
+                onClick={() => setExpandedSection(expandedSection === 'mqtt' ? null : 'mqtt')}
+                className="w-full flex items-center justify-between p-3 hover:bg-gray-800/50 transition-colors"
+              >
+                <div className="text-left flex items-center gap-2">
+                  <span className="text-sm font-semibold text-white">📡 MQTT</span>
+                  {mqttStatus && (
+                    <span className={`w-2 h-2 rounded-full ${MQTT_STATUS_MAP[mqttStatus]?.color || 'bg-gray-500'}`} />
+                  )}
+                  {expandedSection !== 'mqtt' && (
+                    <span className="text-xs text-gray-500">
+                      {MQTT_STATUS_MAP[mqttStatus]?.label || 'Desconectado'}
+                    </span>
+                  )}
+                </div>
+                <span className={`text-gray-500 transition-transform duration-200 ${expandedSection === 'mqtt' ? 'rotate-180' : ''}`}>
+                  ▾
+                </span>
+              </button>
+
+              {expandedSection === 'mqtt' && (
+                <div className="px-3 pb-3 space-y-3 border-t border-gray-800/50 pt-3">
+                  <p className="text-xs text-gray-500 mb-2">
+                    Publica el estado emocional en un broker MQTT vía WebSocket. Estrategia híbrida: envía al cambiar la emoción dominante o cada N segundos como heartbeat.
+                  </p>
+
+                  {/* Estado de conexión */}
+                  <div className="flex items-center gap-2 p-2 bg-gray-800/50 rounded-lg">
+                    <span className={`w-2.5 h-2.5 rounded-full ${MQTT_STATUS_MAP[mqttStatus]?.color || 'bg-gray-500'}`} />
+                    <span className="text-xs text-gray-300">{MQTT_STATUS_MAP[mqttStatus]?.label || 'Desconectado'}</span>
+                    {mqttError && <span className="text-xs text-red-400 ml-auto truncate max-w-[200px]">{mqttError}</span>}
+                  </div>
+
+                  {/* Toggle activar */}
+                  <div className="flex items-center justify-between">
+                    <label className="text-sm font-medium text-gray-300">Activar MQTT</label>
+                    <button
+                      onClick={() => onMqttConfigChange('enabled', !mqttConfig.enabled)}
+                      className={`relative w-11 h-6 rounded-full transition-colors duration-200 ${mqttConfig.enabled ? 'bg-sky-500' : 'bg-gray-600'}`}
+                    >
+                      <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform duration-200 ${mqttConfig.enabled ? 'translate-x-5' : 'translate-x-0'}`} />
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-gray-600">Habilita o deshabilita la conexión MQTT.</p>
+
+                  <TextParam
+                    label="URL del broker"
+                    value={mqttConfig.brokerUrl}
+                    onChange={(v) => onMqttConfigChange('brokerUrl', v)}
+                    placeholder="wss://broker.example.com:8884/mqtt"
+                    description="URL WebSocket del broker MQTT. Debe usar wss:// si la app se sirve por HTTPS."
+                  />
+
+                  <TextParam
+                    label="Topic base"
+                    value={mqttConfig.topicBase}
+                    onChange={(v) => onMqttConfigChange('topicBase', v)}
+                    placeholder="moodcam/device1"
+                    description="Topic raíz. Se publicará en {topic}/emotion y {topic}/status."
+                  />
+
+                  <TextParam
+                    label="Usuario"
+                    value={mqttConfig.username}
+                    onChange={(v) => onMqttConfigChange('username', v)}
+                    placeholder="(opcional)"
+                    description="Usuario para autenticación (dejar vacío si no se requiere)."
+                  />
+
+                  <TextParam
+                    label="Contraseña"
+                    value={mqttConfig.password}
+                    onChange={(v) => onMqttConfigChange('password', v)}
+                    placeholder="(opcional)"
+                    type="password"
+                    description="Contraseña para autenticación (dejar vacío si no se requiere)."
+                  />
+
+                  {/* Intervalo heartbeat */}
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-sm font-medium text-gray-300">Intervalo heartbeat (ms)</label>
+                      <span className="text-xs font-mono text-sky-400 bg-sky-400/10 px-2 py-0.5 rounded-md">{mqttConfig.interval}</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={500}
+                      max={10000}
+                      step={500}
+                      value={mqttConfig.interval}
+                      onChange={(e) => onMqttConfigChange('interval', Number(e.target.value))}
+                      className="w-full h-1.5 rounded-full appearance-none cursor-pointer
+                        bg-gray-700 accent-sky-500
+                        [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4
+                        [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-sky-500 [&::-webkit-slider-thumb]:shadow-md
+                        [&::-webkit-slider-thumb]:hover:bg-sky-400 [&::-webkit-slider-thumb]:transition-colors"
+                    />
+                    <div className="flex justify-between text-[10px] text-gray-600">
+                      <span>500</span>
+                      <span>10000</span>
+                    </div>
+                    <p className="text-[11px] text-gray-600">Tiempo máximo entre publicaciones. Si la emoción dominante no cambia, se envía un heartbeat tras este intervalo.</p>
+                  </div>
+
+                  {/* Botón reset MQTT */}
+                  <button
+                    onClick={onMqttReset}
+                    className="text-xs text-gray-500 hover:text-gray-300 transition-colors"
+                  >
+                    🔄 Restaurar defaults MQTT
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Footer */}

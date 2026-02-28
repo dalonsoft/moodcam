@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import useFaceDetection from './hooks/useFaceDetection'
+import useMqtt from './hooks/useMqtt'
 import CameraView from './components/CameraView'
 import EmotionDisplay from './components/EmotionDisplay'
 import SettingsModal from './components/SettingsModal'
@@ -23,7 +24,23 @@ function App() {
     resetConfig,
   } = useFaceDetection()
 
+  const {
+    mqttConfig,
+    updateMqttConfig,
+    resetMqttConfig,
+    connectionStatus,
+    lastError,
+    publishEmotion,
+  } = useMqtt()
+
   const [settingsOpen, setSettingsOpen] = useState(false)
+
+  // Publicar emociones por MQTT cuando cambian
+  useEffect(() => {
+    if (emotions && dominant) {
+      publishEmotion(emotions, dominant)
+    }
+  }, [emotions, dominant, publishEmotion])
 
   return (
     <div className="min-h-screen bg-gray-950 text-white flex flex-col">
@@ -39,6 +56,17 @@ function App() {
             <p className="text-xs text-gray-500">by Esplubot</p>
           </div>
         </div>
+        <div className="flex items-center gap-1">
+          {mqttConfig.enabled && (
+            <span
+              className={`w-2 h-2 rounded-full transition-colors ${
+                connectionStatus === 'connected' ? 'bg-green-500' :
+                connectionStatus === 'connecting' ? 'bg-yellow-500 animate-pulse' :
+                connectionStatus === 'error' ? 'bg-red-500' : 'bg-gray-500'
+              }`}
+              title={`MQTT: ${connectionStatus}`}
+            />
+          )}
         <button
           onClick={() => setSettingsOpen(true)}
           className="w-10 h-10 flex items-center justify-center rounded-xl text-gray-400 hover:text-white hover:bg-gray-800 transition-colors"
@@ -50,6 +78,7 @@ function App() {
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
           </svg>
         </button>
+        </div>
       </header>
 
       {/* Main */}
@@ -120,6 +149,11 @@ function App() {
         config={detectionConfig}
         onConfigChange={updateConfig}
         onReset={resetConfig}
+        mqttConfig={mqttConfig}
+        onMqttConfigChange={updateMqttConfig}
+        onMqttReset={resetMqttConfig}
+        mqttStatus={connectionStatus}
+        mqttError={lastError}
       />
     </div>
   )
