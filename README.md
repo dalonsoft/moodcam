@@ -15,6 +15,7 @@ Moodcam uses machine learning models running entirely in the browser to detect f
 - **Face mesh overlay** — Draws facial polygon meshes on a canvas layer over the live video.
 - **100% client-side** — All inference happens locally in the browser via TensorFlow.js (through the `@vladmandic/human` library). No images or data are sent to any server.
 - **Responsive UI** — Two-column layout on desktop, single-column on mobile. Built with Tailwind CSS v4.
+- **MQTT telemetry** — Optionally publish emotional state to an MQTT broker via WebSocket. Hybrid strategy: sends on dominant emotion change or as a periodic heartbeat.
 - **Deployable to Vercel** — Includes `vercel.json` with aggressive caching headers for model files.
 
 ## 🛠 Tech Stack
@@ -25,6 +26,7 @@ Moodcam uses machine learning models running entirely in the browser to detect f
 | **Build tool** | [Vite 7](https://vite.dev/) |
 | **Styling** | [Tailwind CSS 4](https://tailwindcss.com/) (via `@tailwindcss/vite`) |
 | **AI / ML** | [@vladmandic/human 3.x](https://github.com/vladmandic/human) (wraps TensorFlow.js) |
+| **MQTT** | [mqtt.js](https://github.com/mqttjs/MQTT.js) (MQTT over WebSocket) |
 | **Linting** | ESLint 9 with flat config, React Hooks & React Refresh plugins |
 | **Deployment** | [Vercel](https://vercel.com/) |
 
@@ -47,7 +49,8 @@ moodcam/
 │   │   ├── CameraView.jsx         # Video + canvas overlay with live indicator
 │   │   └── EmotionDisplay.jsx     # Dominant emotion, emotion bars
 │   └── hooks/
-│       └── useFaceDetection.js    # Core hook: model loading, camera, detection loop
+│       ├── useFaceDetection.js    # Core hook: model loading, camera, detection loop
+│       └── useMqtt.js             # MQTT connection, hybrid publishing, LWT
 ├── index.html                     # HTML shell (lang="es")
 ├── vite.config.js                 # Vite + React + Tailwind plugins
 ├── eslint.config.js               # ESLint flat config
@@ -186,6 +189,116 @@ For the most stable emotion readings, try this combination:
 
 All processing happens **entirely in your browser**. No video frames, images, or detection results are ever transmitted to a server. The ML models are static files served alongside the app.
 
+**Note on MQTT:** When MQTT is enabled, only the detected emotion label, confidence scores, and a timestamp are published to the configured broker. No images or video data are ever sent. MQTT is disabled by default.
+
+## 📡 MQTT Telemetry
+
+Moodcam can optionally publish the detected emotional state to an MQTT broker via WebSocket, enabling integration with dashboards, IoT devices, home automation, or any MQTT-compatible system.
+
+### How It Works
+
+The publishing follows a **hybrid strategy**:
+
+1. **On change** — A message is published immediately when the dominant emotion changes (e.g. "happy" → "surprised").
+2. **Heartbeat** — If the dominant emotion stays the same, a heartbeat message is sent after a configurable interval (default: 2 seconds).
+
+This minimizes traffic while ensuring subscribers always have up-to-date data.
+
+### Topics
+
+| Topic | QoS | Retain | Description |
+|---|---|---|---|
+| `{topicBase}/emotion` | 0 | No | Emotion data payload (published on change or heartbeat) |
+| `{topicBase}/status` | 1 | Yes | Online/offline status. Uses MQTT Last Will and Testament (LWT) for automatic offline notification on disconnect. |
+
+### Emotion Payload
+
+```json
+{
+  "dominant": "happy",
+  "confidence": 0.87,
+  "emotions": {
+    "happy": 0.87,
+    "neutral": 0.10,
+    "surprised": 0.03
+  },
+  "trigger": "change",
+  "timestamp": 1719500000000
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `dominant` | string | The emotion with the highest confidence score. |
+| `confidence` | number | Confidence score (0–1) of the dominant emotion. |
+| `emotions` | object | All emotions above the min. confidence threshold with their scores. |
+| `trigger` | string | `"change"` if the dominant emotion just changed, `"heartbeat"` if it's a periodic update. |
+| `timestamp` | number | Unix timestamp in milliseconds. |
+
+### Configuration
+
+All MQTT settings are available in the settings panel under **📡 MQTT** and are persisted in `localStorage` under the key `moodcam-mqtt-config`.
+
+| Parameter | Default | Description |
+|---|---|---|
+| **Enable MQTT** | `off` | Enables or disables the MQTT connection. |
+| **Broker URL** | `wss://broker.emqx.io:8084/mqtt` | WebSocket URL of the MQTT broker. Must use `wss://` when the app is served over HTTPS. |
+| **Topic Base** | `moodcam/device1` | Root topic. Messages are published to `{base}/emotion` and `{base}/status`. |
+| **Username** | *(empty)* | Username for broker authentication (leave empty if not required). |
+| **Password** | *(empty)* | Password for broker authentication (leave empty if not required). |
+| **Heartbeat interval (ms)** | `2000` | Maximum time between publications. If the dominant emotion doesn't change, a heartbeat is sent after this interval. Range: 500–10,000 ms. |
+
+### Broker Requirements
+
+- Must support **MQTT over WebSocket** (ports 8083 for `ws://` or 8084/8884 for `wss://`).
+- For apps served over HTTPS, the broker **must** use `wss://` (TLS).
+
+#### Recommended: HiveMQ Cloud (free)
+
+[HiveMQ Cloud](https://www.hivemq.com/mqtt-cloud-broker/) offers a **free forever** plan (up to 100 connections, 10 GB/month) that is ideal for educational use:
+
+1. Sign up at [hivemq.cloud](https://console.hivemq.cloud/) and create a free cluster.
+2. Go to **Access Management** and create credentials (username and password).
+3. Copy the cluster URL (e.g. `xxxxxx.s1.eu.hivemq.cloud`).
+4. In Moodcam's MQTT settings, paste the URL — the app will automatically prepend `wss://` and append `:8884/mqtt` if missing.
+5. Enter the username and password you created.
+6. Enable MQTT and you're connected.
+
+No infrastructure to manage, TLS included, and enough capacity for a classroom or workshop.
+
+#### Alternative: Docker Mosquitto with WebSocket
+
+```yaml
+# docker-compose.yml
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf
+```
+
+```conf
+# mosquitto.conf
+listener 1883
+listener 9001
+protocol websockets
+allow_anonymous true
+```
+
+### 🧪 Verifying with MQTT Explorer
+
+[MQTT Explorer](https://mqtt-explorer.com/) is a free, cross-platform graphical client that lets you visualize all messages arriving at a broker in real time. It's the easiest way to verify that Moodcam is publishing correctly:
+
+1. Download and install [MQTT Explorer](https://mqtt-explorer.com/).
+2. Connect to your broker (e.g. `mqtt://localhost:1883` or `wss://broker.emqx.io:8084/mqtt`).
+3. Enable MQTT in Moodcam's settings and start the camera.
+4. In MQTT Explorer you should see the topics `moodcam/device1/status` (with `"online"`) and `moodcam/device1/emotion` updating with each emotion change or heartbeat.
+
+This is especially useful for **debugging connection issues**, inspecting the JSON payload structure, and confirming that LWT (`"offline"`) fires correctly when you close the app.
+
 ## 📖 Glossary
 
 | Term | Definition |
@@ -210,3 +323,10 @@ All processing happens **entirely in your browser**. No video frames, images, or
 | **localStorage** | A browser feature that stores small amounts of data (like your settings) on your device, persisting across page reloads and browser restarts. |
 | **Webcam** | The built-in or external camera on your device. Moodcam uses it to capture live video for analysis. |
 | **Client-side** | Processing that happens entirely on your device (in the browser), as opposed to being sent to a remote server. |
+| **MQTT** | A lightweight messaging protocol designed for IoT devices. Moodcam uses it to optionally publish detected emotions to a broker, which then distributes them to any subscribed clients. |
+| **MQTT Broker** | A server that receives messages from publishers (like Moodcam) and forwards them to subscribers. Examples include Mosquitto, EMQX, and HiveMQ. |
+| **WebSocket** | A protocol that enables two-way communication between a browser and a server over a single, persistent connection. Moodcam uses WebSocket to connect to MQTT brokers from the browser. |
+| **LWT (Last Will and Testament)** | An MQTT feature where the broker automatically publishes a pre-configured message (e.g. "offline") if a client disconnects unexpectedly, so subscribers know it's gone. |
+| **QoS (Quality of Service)** | MQTT delivery guarantee levels: QoS 0 = at most once (fire and forget), QoS 1 = at least once, QoS 2 = exactly once. Moodcam uses QoS 0 for emotion data and QoS 1 for status messages. |
+| **Topic** | An MQTT addressing string (e.g. `moodcam/device1/emotion`) that organizes messages into channels. Publishers send to a topic; subscribers listen on a topic. |
+| **Heartbeat** | A periodic message sent even when nothing has changed, to confirm the sender is still active and connected. |
