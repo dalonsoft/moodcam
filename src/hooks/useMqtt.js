@@ -71,6 +71,21 @@ export default function useMqtt() {
             return
         }
 
+        // Normalizar URL: asegurar que tenga protocolo wss:// o ws://
+        let brokerUrl = mqttConfig.brokerUrl.trim()
+        if (!/^wss?:\/\//i.test(brokerUrl)) {
+            brokerUrl = `wss://${brokerUrl}`
+        }
+        // Asegurar puerto :8884 si no se especificó uno y es wss://
+        if (/^wss:\/\//i.test(brokerUrl) && !/:\d+/.test(brokerUrl.replace(/^wss?:\/\//, ''))) {
+            // Insertar :8884 antes del path
+            brokerUrl = brokerUrl.replace(/^(wss:\/\/[^/]+)/, '$1:8884')
+        }
+        // Asegurar path /mqtt si no tiene path
+        if (!/\/\w/.test(brokerUrl.replace(/^wss?:\/\/[^/]*/, ''))) {
+            brokerUrl = brokerUrl.replace(/\/?$/, '/mqtt')
+        }
+
         setConnectionStatus('connecting')
         setLastError(null)
 
@@ -93,7 +108,15 @@ export default function useMqtt() {
             options.password = mqttConfig.password
         }
 
-        const client = mqtt.connect(mqttConfig.brokerUrl, options)
+        let client
+        try {
+            client = mqtt.connect(brokerUrl, options)
+        } catch (err) {
+            console.error('MQTT connect error:', err)
+            setLastError(err.message || 'URL del broker inválida')
+            setConnectionStatus('error')
+            return
+        }
         clientRef.current = client
 
         client.on('connect', () => {
